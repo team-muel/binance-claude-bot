@@ -125,7 +125,17 @@ def run_backtest(
             hit_tp = (position == 1 and hi >= tp_price) or \
                      (position == -1 and lo <= tp_price)
 
-            if hit_sl:
+            if hit_sl and hit_tp:
+                # 동시 도달: 전봉 종가(bar open 근사값) 기준 거리로 우선순위 결정
+                prev_close = close[i - 1] if i > 0 else entry_price
+                sl_dist_from_prev = abs(prev_close - sl_price)
+                tp_dist_from_prev = abs(prev_close - tp_price)
+                if sl_dist_from_prev <= tp_dist_from_prev:
+                    close_position(sl_price, "sl", timestamps[i], i)
+                else:
+                    close_position(tp_price, "tp", timestamps[i], i)
+                exited_this_bar = True
+            elif hit_sl:
                 close_position(sl_price, "sl", timestamps[i], i)
                 exited_this_bar = True
             elif hit_tp:
@@ -152,7 +162,7 @@ def run_backtest(
                     cash -= entry_notional + entry_fee
                     position_qty = qty
                 else:
-                    qty = target_notional / entry_price
+                    qty = target_notional / (entry_price * (1.0 + per_side_rate))
                     entry_notional = qty * entry_price
                     entry_fee = entry_notional * per_side_rate
                     cash += entry_notional - entry_fee

@@ -22,7 +22,7 @@ from research.config import ExperimentConfig, GRID_SAMPLING_STRATEGY, MIN_TRADES
 from research.data.loader import load_ohlcv
 from research.strategy.rules import generate_signals
 from research.backtest.engine import run_backtest
-from research.backtest.metrics import compute_metrics
+from research.backtest.metrics import TF_PERIODS_PER_YEAR, compute_metrics
 from research.evaluation.walk_forward import generate_folds, split_fold_data
 from research.evaluation.stability import local_robustness, parameter_dispersion
 from research.evaluation.overfitting import (
@@ -83,30 +83,81 @@ def build_log_path(config: ExperimentConfig, run_started_at: datetime) -> str:
     return os.path.join(config.logs_dir, filename)
 
 
-def make_objective(is_df: pd.DataFrame, cost_config: Dict[str, Any]):
+def make_objective(
+    is_df: pd.DataFrame,
+    cost_config: Dict[str, Any],
+    periods_per_year: float = TF_PERIODS_PER_YEAR["30m"],
+    equity_curve_cache: Dict[Any, pd.Series] | None = None,
+):
     """In-sample 데이터에 대한 objective function을 만든다.
 
     거래 수가 MIN_TRADES_FOR_VALID_OBJECTIVE 미만이면 큰 벌점(-100)을
     부과하여 무거래/극소거래 파라미터가 선택되지 않도록 한다.
+
+    equity_curve_cache를 제공하면 평가된 파라미터의 equity curve를 캐싱한다.
+    이 캐시는 CSCV PBO 계산에 사용된다.
     """
     def objective(params: Dict[str, Any]) -> float:
         signals = generate_signals(is_df, params)
         result = run_backtest(signals, cost_config)
-        metrics = compute_metrics(result["equity_curve"], result["trades"])
+        if equity_curve_cache is not None:
+            key = frozenset(params.items())
+            equity_curve_cache[key] = result["equity_curve"]
+        metrics = compute_metrics(result["equity_curve"], result["trades"], periods_per_year)
         if metrics["n_trades"] < MIN_TRADES_FOR_VALID_OBJECTIVE:
             return -100.0
         return metrics["sharpe"]
     return objective
 
 
-def make_oos_objective(oos_df: pd.DataFrame, cost_config: Dict[str, Any]):
+def make_oos_objective(oos_df: pd.DataFrame, cost_config: Dict[str, Any], periods_per_year: float = TF_PERIODS_PER_YEAR["30m"]):
     """오에스 데이터에 대한 평가 함수를 만든다."""
     def objective(params: Dict[str, Any]) -> float:
         signals = generate_signals(oos_df, params)
         result = run_backtest(signals, cost_config)
-        metrics = compute_metrics(result["equity_curve"], result["trades"])
+        metrics = compute_metrics(result["equity_curve"], result["trades"], periods_per_year)
         return metrics["sharpe"]
     return objective
+
+
+def _compute_cscv_pbo(
+    equity_curve_cache: Dict[Any, pd.Series],
+    n_partitions: int = 10,
+) -> float | None:
+    """
+    IS equity curve 캐시로부터 CSCV PBO를 계산한다.
+
+    Parameters
+    ----------
+    equity_curve_cache : dict
+        frozenset(params) → equity_curve 매핑. optimizer가 IS에서 평가한 전체 조합.
+    n_partitions : int
+        CSCV 시간 분할 수 (짝수). 자동으로 안전한 범위로 조정된다.
+
+    Returns
+    -------
+    float | None
+        PBO 값 (0~1). 조합 수 또는 data가 부족하면 None을 반환한다.
+    """
+    from research.evaluation.pbo_cscv import compute_pbo_cscv
+
+    curves = list(equity_curve_cache.values())
+    if len(curves) < 4:
+        return None
+    min_len = min(len(c) for c in curves)
+    # 각 파티션에 최소 20개 bar 보장, n_partitions는 짝수여야 함
+    safe_parts = (min_len // 20) * 2
+    actual_parts = min(n_partitions, max(4, safe_parts))
+    if actual_parts < 4 or min_len < actual_parts * 2:
+        return None
+    # returns matrix: shape (T-1, N)
+    arrays = [
+        np.asarray(c.pct_change(fill_method=None).dropna().values[: min_len - 1], dtype=np.float64)
+        for c in curves
+    ]
+    rets: np.ndarray = np.column_stack(arrays)
+    result = compute_pbo_cscv(rets, n_partitions=actual_parts)
+    return float(result["pbo"])
 
 
 def summarize_optimizer_results(
@@ -134,6 +185,15 @@ def summarize_optimizer_results(
     decays = [float(result.get("is_oos_decay", 0)) for result in results]
     mean_decay = float(np.mean(decays))
 
+    # CSCV PBO 평균 (None 제외)
+    cscv_pbo_vals = [result["cscv_pbo"] for result in results if result.get("cscv_pbo") is not None]
+    mean_cscv_pbo = float(np.mean(cscv_pbo_vals)) if cscv_pbo_vals else None
+
+    # DSR: OOS 기간의 실제 수익률 관측치 수 사용
+    total_oos_bars = sum(int(result.get("oos_n_bars", 0)) for result in results)
+    if total_oos_bars < 1:
+        total_oos_bars = len(results)  # fallback
+
     return {
         "median_oos_sharpe": float(pd.Series(oos_sharpes).median()),
         "mean_oos_sharpe": mean_oos_sharpe,
@@ -147,10 +207,11 @@ def summarize_optimizer_results(
         "mean_is_oos_decay": mean_decay,
         "is_oos_correlation": is_oos_corr,
         "pbo_proxy": probability_of_backtest_overfitting(is_sharpes, oos_sharpes),
+        "mean_cscv_pbo": mean_cscv_pbo,
         "deflated_sharpe_proxy": deflated_sharpe_proxy(
             observed_sharpe=mean_oos_sharpe,
             n_trials=eval_budget,
-            n_obs=len(oos_sharpes),
+            n_obs=total_oos_bars,
         ),
         "n_folds": len(results),
     }
@@ -272,6 +333,7 @@ def run_experiment(config: ExperimentConfig | None = None):
                       f"mean_vol={info['mean_oos_vol']:.4f}" if isinstance(info['mean_oos_vol'], float) else "")
 
             execution_config = {**asdict(config.cost), **asdict(config.backtest)}
+            ppy = TF_PERIODS_PER_YEAR.get(config.timeframe, TF_PERIODS_PER_YEAR["30m"])
             all_results: Dict[str, list[Dict[str, Any]]] = {name: [] for name in OPTIMIZER_CLASSES}
             all_best_params: Dict[str, list[Dict[str, Any]]] = {name: [] for name in OPTIMIZER_CLASSES}
 
@@ -285,16 +347,22 @@ def run_experiment(config: ExperimentConfig | None = None):
                     print(f"    SKIP: insufficient data (IS={len(is_df)}, OOS={len(oos_df)})")
                     continue
 
-                is_objective = make_objective(is_df, execution_config)
-                oos_objective = make_oos_objective(oos_df, execution_config)
+                oos_objective = make_oos_objective(oos_df, execution_config, ppy)
 
                 for opt_name, opt_class in OPTIMIZER_CLASSES.items():
+                    # CSCV PBO 계산용 IS equity curve 캐시 (optimizer별 독립 캐시)
+                    is_curve_cache: Dict[Any, pd.Series] = {}
+                    is_objective = make_objective(is_df, execution_config, ppy, is_curve_cache)
+
                     optimizer = opt_class(eval_budget=config.eval_budget, seed=config.seed)
                     result = optimizer.optimize(is_objective, PARAM_SPACE)
 
                     if result["best_params"] is None:
                         print(f"    {opt_name}: no valid solution found")
                         continue
+
+                    # CSCV PBO from IS equity curves (optimizer가 탐색한 조합 기반)
+                    cscv_pbo = _compute_cscv_pbo(is_curve_cache)
 
                     # OOS 평가
                     oos_score = oos_objective(result["best_params"])
@@ -304,7 +372,8 @@ def run_experiment(config: ExperimentConfig | None = None):
                     # OOS 메트릭 전체
                     oos_signals = generate_signals(oos_df, result["best_params"])
                     oos_bt = run_backtest(oos_signals, execution_config)
-                    oos_metrics = compute_metrics(oos_bt["equity_curve"], oos_bt["trades"])
+                    oos_metrics = compute_metrics(oos_bt["equity_curve"], oos_bt["trades"], ppy)
+                    oos_n_bars = len(oos_bt["equity_curve"])
 
                     # Convergence trace
                     conv_curve = extract_convergence_curve(result.get("history", []))
@@ -328,6 +397,8 @@ def run_experiment(config: ExperimentConfig | None = None):
                         "local_mean_improvement": robustness["mean_improvement"],
                         "local_n_neighbors": robustness["n_neighbors"],
                         "n_evals": result["n_evals"],
+                        "oos_n_bars": oos_n_bars,
+                        "cscv_pbo": cscv_pbo,
                         **{f"oos_{k}": v for k, v in oos_metrics.items()},
                         "best_params": result["best_params"],
                     }
@@ -365,7 +436,6 @@ def run_experiment(config: ExperimentConfig | None = None):
 
             # 결과 저장
             os.makedirs(config.artifacts_dir, exist_ok=True)
-            artifact_path = os.path.join(config.artifacts_dir, f"{config.symbol}_{config.seed}.json")
             artifact_filename = (
                 f"{config.symbol}_{config.timeframe}_budget{config.eval_budget}_seed{config.seed}_"
                 f"v{config.artifact_schema_version}.json"
