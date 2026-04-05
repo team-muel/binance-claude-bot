@@ -92,6 +92,12 @@ def estimate_funding_impact(
     adjusted_equity_series = pd.Series(adjusted_equity, index=equity_curve.index)
 
     metrics_before = compute_metrics(equity_curve, trades, ppy)
+
+    # 조정된 equity 가 음수로 내려가면 validate_equity_curve 에서 ValueError.
+    # funding drag 추정값이 크더라도 최솟값 1.0 으로 클리핑하여 계속 진행한다.
+    adjusted_equity = np.maximum(adjusted_equity, 1.0)
+    adjusted_equity_series = pd.Series(adjusted_equity, index=equity_curve.index)
+
     metrics_after = compute_metrics(adjusted_equity_series, trades, ppy)
 
     final_eq = float(equity_curve.iloc[-1])

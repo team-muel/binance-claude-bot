@@ -58,17 +58,14 @@ def convergence_statistics(
     # 절대값이 아니라 "초기값에서 최종값으로 이동한 개선폭의 50%"에 도달하는 시점.
     # 이렇게 해야 음수 Sharpe 구간에서도 해석 가능하다.
     threshold = initial + 0.5 * (final - initial)
-    if final >= initial:
-        reached = np.where(curve >= threshold)[0]
-    else:
-        reached = np.where(curve <= threshold)[0]
+    reached = np.where(curve >= threshold)[0]
     half_eval = int(reached[0]) + 1 if len(reached) > 0 else len(curve)
 
     # 마지막 100 evals에서의 improvement
     tail = min(100, len(curve))
     last100_impr = float(curve[-1] - curve[-tail])
 
-    # Area under curve (정규화)
+    # Area under curve: curve 값의 단순 평균 (점수 범위 보정은 하지 않음)
     auc = float(np.sum(curve) / max(len(curve), 1))
 
     return {

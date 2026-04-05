@@ -36,6 +36,10 @@ def apply_signal_delay(
     delayed["signal"] = delayed["signal"].shift(delay_bars).fillna(0).astype(int)
     delayed["exit_long"] = delayed["exit_long"].shift(delay_bars).fillna(False)
     delayed["exit_short"] = delayed["exit_short"].shift(delay_bars).fillna(False)
+    # SL/TP 거리도 신호와 함께 shift한다.
+    # 지연 진입 시 진입할 봉의 ATR 기반 SL/TP를 적용해야 일관성이 유지된다.
+    delayed["sl_distance"] = delayed["sl_distance"].shift(delay_bars).ffill()
+    delayed["tp_distance"] = delayed["tp_distance"].shift(delay_bars).ffill()
     return delayed
 
 

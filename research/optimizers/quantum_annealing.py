@@ -129,6 +129,8 @@ class QuantumAnnealingOptimizer(BaseOptimizer):
         best_params = None
         evals_done = 0
         evaluated: List[Dict[str, Any]] = []  # {"binary": dict, "score": float}
+        stall_iters = 0
+        max_stall_iters = self.eval_budget * 20  # 제약 위반만 반복되는 무한루프 방지
 
         while evals_done < self.eval_budget:
             reads = min(self.num_reads, self.eval_budget - evals_done)
@@ -142,6 +144,7 @@ class QuantumAnnealingOptimizer(BaseOptimizer):
 
             response = sampler.sample_qubo(Q, num_reads=reads, seed=rng.randint(0, 2**31))  # type: ignore[arg-type]
 
+            evals_before = evals_done
             for sample in response.samples():  # type: ignore[no-untyped-call]
                 if evals_done >= self.eval_budget:
                     break
@@ -157,6 +160,14 @@ class QuantumAnnealingOptimizer(BaseOptimizer):
                 if score > best_score:
                     best_score = score
                     best_params = params
+
+            # 이번 배치에서 유효 평가가 없으면 stall 카운터 증가
+            if evals_done == evals_before:
+                stall_iters += 1
+                if stall_iters >= max_stall_iters:
+                    break  # 무한루프 탈출
+            else:
+                stall_iters = 0
 
         return {
             "best_params": best_params,

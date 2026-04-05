@@ -46,12 +46,23 @@ def validate_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
         deltas = df["timestamp"].diff().dropna()
         invalid_deltas = deltas[deltas != expected_delta]
         if not invalid_deltas.empty:
-            first_bad_idx = int(invalid_deltas.index[0])
-            previous_ts = df.loc[first_bad_idx - 1, "timestamp"]
-            current_ts = df.loc[first_bad_idx, "timestamp"]
-            raise ValueError(
-                "예상한 봉 간격과 다른 구간이 있습니다: "
-                f"{previous_ts} -> {current_ts} ({invalid_deltas.iloc[0]})"
+            # 정상 배수 간격 (유지보수 등으로 봉이 빠진 경우)은 경고만 출력하고 계속 진행
+            non_multiple = invalid_deltas[invalid_deltas % expected_delta != pd.Timedelta(0)]
+            if not non_multiple.empty:
+                first_bad_idx = int(non_multiple.index[0])
+                previous_ts = df.loc[first_bad_idx - 1, "timestamp"]
+                current_ts = df.loc[first_bad_idx, "timestamp"]
+                raise ValueError(
+                    "예상한 봉 간격과 맞지 않는 구간이 있습니다 (배수가 아닌 간격): "
+                    f"{previous_ts} -> {current_ts} ({non_multiple.iloc[0]})"
+                )
+            # 누락 봉(배수 간격)은 경고만 출력
+            n_gaps = len(invalid_deltas)
+            import warnings
+            warnings.warn(
+                f"{n_gaps}개의 봉 누락 구간이 있습니다 (유지보수 등). 실험은 계속 진행합니다.",
+                UserWarning,
+                stacklevel=3,
             )
 
     return df

@@ -100,6 +100,14 @@ def compute_landscape_shift(
     dict
         best_positions, centroid, max_displacement, mean_displacement
     """
+    if not fold_landscapes:
+        return {
+            "best_positions": [],
+            "centroid": [0.0, 0.0],
+            "max_displacement": 0.0,
+            "mean_displacement": 0.0,
+        }
+
     positions: List[tuple[float, float]] = []
     for ls in fold_landscapes:
         x_vals = ls["x_values"]

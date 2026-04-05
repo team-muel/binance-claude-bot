@@ -19,8 +19,9 @@ def rsi(series: pd.Series, period: int | float = 14) -> pd.Series:
     loss = -delta.where(delta < 0, 0.0)
     avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    # avg_loss == 0 인 경우 RSI = 100 (완전 상승 구간), 0 으로 나누기 방지
+    rs = avg_gain / avg_loss.replace(0.0, float("nan"))
+    return 100 - (100 / (1 + rs.fillna(float("inf"))))
 
 
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int | float = 14) -> pd.Series:

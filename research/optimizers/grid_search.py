@@ -19,7 +19,8 @@ class GridSearchOptimizer(BaseOptimizer):
         objective_fn: Callable[[Dict[str, Any]], float],
         param_space: Dict[str, list[Any]],
     ) -> Dict[str, Any]:
-        all_params = get_all_valid_params()
+        from research.strategy.params import get_all_valid_params as _get_all
+        all_params = _get_all(param_space)
 
         # budget보다 조합이 많으면 seed 기반 random subset
         if len(all_params) > self.eval_budget:

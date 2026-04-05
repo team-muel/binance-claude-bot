@@ -35,7 +35,10 @@ class ClassicalSAOptimizer(BaseOptimizer):
         elif self.cooling_schedule == "linear":
             return self.temp_start + (self.temp_end - self.temp_start) * progress
         elif self.cooling_schedule == "logarithmic":
-            return self.temp_start / (1 + math.log(1 + evals_done))
+            # temp_start에서 temp_end 까지 로그 스케일로 감소.
+            # t = temp_end + (temp_start - temp_end) / (1 + log(1 + evals_done))
+            log_factor = 1.0 / (1.0 + math.log(1.0 + evals_done))
+            return self.temp_end + (self.temp_start - self.temp_end) * log_factor
         else:
             return self.temp_start * (self.temp_end / self.temp_start) ** progress
 

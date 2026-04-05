@@ -7,9 +7,13 @@ import numpy as np
 
 
 def is_oos_decay(is_sharpe: float, oos_sharpe: float) -> float:
-    """In-sample 대비 OOS Sharpe 저하율을 반환한다. 0이면 저하 없음."""
+    """In-sample 대비 OOS Sharpe 저하율을 반환한다. 0이면 저하 없음.
+
+    is_sharpe == 0인 경우, OOS가 음수면 양수 (+overfitting 신호),
+    OOS가 양수면 0.0을 반환 (야간 IS=0 시작점에서 개선).
+    """
     if is_sharpe == 0:
-        return 0.0
+        return float(-oos_sharpe) if oos_sharpe < 0 else 0.0
     return (is_sharpe - oos_sharpe) / abs(is_sharpe)
 
 
