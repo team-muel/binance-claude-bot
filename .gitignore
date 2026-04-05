@@ -1,0 +1,31 @@
+# 환경변수 / 시크릿
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 로그 및 생성 파일
+logs/
+*.png
+research/artifacts/*
+!research/artifacts/.gitkeep
+research/data/raw/*
+!research/data/raw/.gitkeep
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# 빌드/배포
+*.egg-info/
+dist/
+build/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
